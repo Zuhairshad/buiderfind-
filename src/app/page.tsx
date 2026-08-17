@@ -512,8 +512,8 @@ function Hero() {
   const [postcode, setPostcode] = useState("");
 
   return (
-    <section className="relative bg-[#E3F2FD] overflow-hidden">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-16 md:py-22 lg:py-28 relative z-10">
+    <section className="relative bg-white overflow-hidden">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-24 md:py-32 lg:py-40 relative z-10">
         <div className="mx-auto max-w-[580px] xl:mx-0">
           <h1 className="text-[36px] sm:text-[44px] lg:text-[52px] font-bold text-[#0D47A1] leading-[1.1] mb-5 tracking-tight">
             Find Trusted Builders,{" "}
