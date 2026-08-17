@@ -1,0 +1,11 @@
+import { ObjectId } from "mongodb";
+import { apiUser } from "@/lib/auth/api-auth";
+import { collections } from "@/lib/db/collections";
+import { assertTrustedOrigin, jsonError, readJson, ApiError } from "@/lib/http/api";
+import { id } from "@/lib/marketplace/access";
+import { audit, publishEvent } from "@/lib/platform/events";
+import { createNotification } from "@/lib/notifications/delivery";
+
+export async function PATCH(request: Request, context: RouteContext<"/api/admin/verifications/[id]">) {
+  try { assertTrustedOrigin(request); const admin = await apiUser("admin"); const verificationId = id((await context.params).id); const body = await readJson(request) as { action?: "approve" | "reject" | "suspend"; notes?: string }; if (!body.action || !["approve", "reject", "suspend"].includes(body.action)) throw new ApiError(400, "Choose a verification decision", "INVALID_ACTION"); const c = await collections(); const requestDoc = await c.verificationRequests.findOne({ _id: verificationId }); if (!requestDoc) throw new ApiError(404, "Verification request not found", "NOT_FOUND"); const status = body.action === "approve" ? "verified" : body.action === "reject" ? "rejected" : "suspended"; const now = new Date(); await Promise.all([c.verificationRequests.updateOne({ _id: verificationId }, { $set: { status, notes: body.notes?.slice(0, 1000), reviewedBy: new ObjectId(admin.id), reviewedAt: now, updatedAt: now } }), c.builderProfiles.updateOne({ _id: requestDoc.profileId }, { $set: { verificationStatus: status, profileVisible: status === "verified", updatedAt: now } }), audit({ actorId: new ObjectId(admin.id), action: `verification.${body.action}`, entityType: "verificationRequest", entityId: verificationId, metadata: { status } }), publishEvent({ type: "verification.updated", entityId: verificationId, audienceRoles: ["admin"], audienceUserIds: [requestDoc.builderId], payload: { status } }), createNotification({ userId: requestDoc.builderId, type: "verification.updated", title: `Verification ${status}`, body: body.notes || `Your BuilderFind verification status is now ${status}.`, href: "/builder/dashboard" })]); return Response.json({ ok: true, status }); } catch (error) { return jsonError(error); }
+}

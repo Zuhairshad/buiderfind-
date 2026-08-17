@@ -1,0 +1,8 @@
+import { ObjectId } from "mongodb";
+import { apiUser } from "@/lib/auth/api-auth";
+import { collections } from "@/lib/db/collections";
+import { assertTrustedOrigin, jsonError, readJson, ApiError } from "@/lib/http/api";
+import { id } from "@/lib/marketplace/access";
+import { audit, publishEvent } from "@/lib/platform/events";
+
+export async function PATCH(request: Request, context: RouteContext<"/api/admin/users/[id]">) { try { assertTrustedOrigin(request); const admin = await apiUser("admin"); const targetId = id((await context.params).id); if (targetId.toHexString() === admin.id) throw new ApiError(409, "You cannot change your own admin status here", "SELF_ACTION_REJECTED"); const body = await readJson(request) as { status?: "active" | "suspended" }; if (!body.status || !["active", "suspended"].includes(body.status)) throw new ApiError(400, "Invalid account status", "INVALID_STATUS"); const c = await collections(); const result = await c.users.updateOne({ _id: targetId }, { $set: { status: body.status, updatedAt: new Date() }, ...(body.status === "suspended" ? { $inc: { tokenVersion: 1 } } : {}) }); if (!result.matchedCount) throw new ApiError(404, "User not found", "NOT_FOUND"); if (body.status === "suspended") await c.sessions.updateMany({ userId: targetId, revokedAt: { $exists: false } }, { $set: { revokedAt: new Date() } }); await Promise.all([audit({ actorId: new ObjectId(admin.id), action: `user.${body.status}`, entityType: "user", entityId: targetId }), publishEvent({ type: "account.status_updated", entityId: targetId, audienceRoles: ["admin"], audienceUserIds: [targetId], payload: { status: body.status } })]); return Response.json({ ok: true }); } catch (error) { return jsonError(error); } }

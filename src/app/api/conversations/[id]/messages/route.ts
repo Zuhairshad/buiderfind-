@@ -1,0 +1,16 @@
+import { ObjectId } from "mongodb";
+import { apiUser } from "@/lib/auth/api-auth";
+import { collections } from "@/lib/db/collections";
+import { assertTrustedOrigin, jsonError, readJson, ApiError } from "@/lib/http/api";
+import { id } from "@/lib/marketplace/access";
+import { messageCreateSchema } from "@/lib/platform/schemas";
+import { serialise } from "@/lib/platform/serialise";
+import { audit, publishEvent } from "@/lib/platform/events";
+import { createNotification } from "@/lib/notifications/delivery";
+
+export async function GET(request: Request, context: RouteContext<"/api/conversations/[id]/messages">) {
+  try { const user = await apiUser(); const conversationId = id((await context.params).id); const c = await collections(); const conversation = await c.conversations.findOne({ _id: conversationId, participantIds: new ObjectId(user.id) }); if (!conversation) throw new ApiError(404, "Conversation not found", "NOT_FOUND"); const cursor = new URL(request.url).searchParams.get("cursor"); const filter: Record<string, unknown> = { conversationId }; if (cursor && ObjectId.isValid(cursor)) filter._id = { $lt: new ObjectId(cursor) }; const messages = await c.messages.find(filter).sort({ _id: -1 }).limit(50).toArray(); await c.messages.updateMany({ conversationId, recipientId: new ObjectId(user.id), readAt: { $exists: false } }, { $set: { readAt: new Date() } }); return Response.json({ messages: serialise(messages.reverse()), nextCursor: messages[0]?._id.toHexString() ?? null }); } catch (error) { return jsonError(error); }
+}
+export async function POST(request: Request, context: RouteContext<"/api/conversations/[id]/messages">) {
+  try { assertTrustedOrigin(request); const user = await apiUser(); const conversationId = id((await context.params).id); const { body } = messageCreateSchema.parse(await readJson(request)); const c = await collections(); const senderId = new ObjectId(user.id); const conversation = await c.conversations.findOne({ _id: conversationId, participantIds: senderId }); if (!conversation) throw new ApiError(404, "Conversation not found", "NOT_FOUND"); const recipientId = conversation.participantIds.find((participant) => !participant.equals(senderId)); if (!recipientId) throw new ApiError(409, "Conversation has no recipient", "INVALID_CONVERSATION"); const message = { _id: new ObjectId(), conversationId, senderId, recipientId, body, mediaIds: [], createdAt: new Date() }; await Promise.all([c.messages.insertOne(message), c.conversations.updateOne({ _id: conversationId }, { $set: { lastMessageAt: message.createdAt, lastMessagePreview: body.slice(0, 140), updatedAt: message.createdAt } })]); await Promise.all([audit({ actorId: senderId, action: "message.created", entityType: "message", entityId: message._id }), publishEvent({ type: "message.created", entityId: message._id, audienceUserIds: [senderId, recipientId], payload: { conversationId: conversationId.toHexString() } }), createNotification({ userId: recipientId, type: "message.received", title: `New message from ${user.firstName}`, body: body.slice(0, 180), href: `/${user.role === "builder" ? "customer" : "builder"}/dashboard?conversation=${conversationId.toHexString()}` })]); return Response.json({ message: serialise(message) }, { status: 201 }); } catch (error) { return jsonError(error); }
+}

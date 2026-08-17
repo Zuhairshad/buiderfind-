@@ -1,0 +1,6 @@
+import { ObjectId } from "mongodb";
+import { apiUser } from "@/lib/auth/api-auth";
+import { collections } from "@/lib/db/collections";
+import { assertTrustedOrigin, jsonError, readJson, ApiError } from "@/lib/http/api";
+import { id } from "@/lib/marketplace/access";
+export async function POST(request: Request, context: RouteContext<"/api/jobs/[id]/media">) { try { assertTrustedOrigin(request); const user = await apiUser("customer"); const jobId = id((await context.params).id); const body = await readJson(request) as { mediaIds?: string[] }; const mediaIds = (body.mediaIds ?? []).filter(ObjectId.isValid).map((value) => new ObjectId(value)); if (!mediaIds.length) throw new ApiError(400, "No files supplied", "MEDIA_REQUIRED"); const c = await collections(); const ownerId = new ObjectId(user.id); const ownedCount = await c.media.countDocuments({ _id: { $in: mediaIds }, ownerId, purpose: "job" }); if (ownedCount !== mediaIds.length) throw new ApiError(403, "One or more files do not belong to this job owner", "FORBIDDEN"); const result = await c.jobs.updateOne({ _id: jobId, customerId: ownerId }, { $addToSet: { mediaIds: { $each: mediaIds } }, $set: { updatedAt: new Date() } }); if (!result.matchedCount) throw new ApiError(404, "Job not found", "NOT_FOUND"); return Response.json({ ok: true }); } catch (error) { return jsonError(error); } }

@@ -1,0 +1,12 @@
+import { MongoServerError, ObjectId } from "mongodb";
+import { apiUser } from "@/lib/auth/api-auth";
+import { collections } from "@/lib/db/collections";
+import { assertTrustedOrigin, jsonError, readJson, ApiError } from "@/lib/http/api";
+import { reviewCreateSchema } from "@/lib/platform/schemas";
+import { audit, publishEvent } from "@/lib/platform/events";
+import { serialise } from "@/lib/platform/serialise";
+import { createNotification } from "@/lib/notifications/delivery";
+
+export async function POST(request: Request) {
+  try { assertTrustedOrigin(request); const user = await apiUser("customer"); const data = reviewCreateSchema.parse(await readJson(request)); const c = await collections(); const customerId = new ObjectId(user.id); const booking = await c.bookings.findOne({ _id: new ObjectId(data.bookingId), customerId, status: "completed" }); if (!booking) throw new ApiError(409, "Reviews can only be left after a completed booking", "BOOKING_NOT_COMPLETED"); const now = new Date(); const review = { _id: new ObjectId(), bookingId: booking._id, jobId: booking.jobId, customerId, builderId: booking.builderId, rating: data.rating, title: data.title, body: data.body, status: "published" as const, createdAt: now, updatedAt: now }; await c.reviews.insertOne(review); const aggregate = await c.reviews.aggregate<{ average: number; count: number }>([{ $match: { builderId: booking.builderId, status: "published" } }, { $group: { _id: null, average: { $avg: "$rating" }, count: { $sum: 1 } } }]).next(); await c.builderProfiles.updateOne({ userId: booking.builderId }, { $set: { ratingAverage: Number((aggregate?.average ?? 0).toFixed(2)), reviewCount: aggregate?.count ?? 0, updatedAt: now } }); await Promise.all([audit({ actorId: customerId, action: "review.created", entityType: "review", entityId: review._id, metadata: { rating: review.rating } }), publishEvent({ type: "review.created", entityId: review._id, audienceRoles: ["admin"], audienceUserIds: [booking.builderId], payload: { rating: review.rating } }), createNotification({ userId: booking.builderId, type: "review.received", title: "New customer review", body: `${data.rating}/5 — ${data.title}`, href: "/builder/dashboard" })]); return Response.json({ review: serialise(review) }, { status: 201 }); } catch (error) { if (error instanceof MongoServerError && error.code === 11000) return jsonError(new ApiError(409, "A review has already been submitted for this booking", "REVIEW_EXISTS")); return jsonError(error); }
+}
