@@ -557,7 +557,7 @@ function Hero() {
             ))}
           </div>
           <div className="relative mt-10 aspect-[9/8] xl:absolute xl:inset-y-0 xl:right-0 xl:mt-0 xl:aspect-auto xl:w-[52%] xl:p-12">
-            <div className="relative h-full max-h-[560px] w-full overflow-hidden rounded-[1.75rem] border border-[#90CAF9] bg-white shadow-[0_20px_55px_rgba(13,71,161,0.14)] xl:rounded-[2rem] xl:shadow-[0_24px_70px_rgba(13,71,161,0.16)]">
+            <div className="relative h-full max-h-[560px] w-full overflow-hidden">
               <Image
                 src={heroImage}
                 alt="A diverse team of UK construction professionals"
